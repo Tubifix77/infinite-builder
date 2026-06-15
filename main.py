@@ -12,6 +12,7 @@ def main():
     parser.add_argument("goal", nargs="+", help="What to build")
     parser.add_argument("--dir", default=r"D:\Projects", help="Output directory")
     parser.add_argument("--max", type=int, default=None, help="Max iterations (default: forever)")
+    parser.add_argument("--ollama", action="store_true", help="Enable Ollama as a provider (opt-in)")
     args = parser.parse_args()
     goal = " ".join(args.goal)
     print(f"\n∞  Infinite Builder")
@@ -19,7 +20,7 @@ def main():
     print(f"   Output: {args.dir}")
     print(f"   Ctrl+C to stop\n")
     try:
-        asyncio.run(run(goal=goal, output_dir=args.dir, max_iterations=args.max))
+        asyncio.run(run(goal=goal, output_dir=args.dir, max_iterations=args.max, use_ollama=args.ollama))
     except KeyboardInterrupt:
         print("\n[stopped]")
 

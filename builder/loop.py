@@ -11,12 +11,12 @@ from builder.coder import build_mvp, improve
 from builder.validator import validate
 
 
-def _make_keychain() -> Keychain:
-    return Keychain()
+def _make_keychain(use_ollama: bool = False) -> Keychain:
+    return Keychain(use_ollama=use_ollama)
 
 
-async def run(goal: str, output_dir: str = r"D:\Projects", max_iterations: int = None):
-    kc = _make_keychain()
+async def run(goal: str, output_dir: str = r"D:\Projects", max_iterations: int = None, use_ollama: bool = False):
+    kc = _make_keychain(use_ollama=use_ollama)
     saver = Saver(base_dir=output_dir, goal=goal)
     searcher = Searcher()
     os.makedirs(saver.project_dir, exist_ok=True)

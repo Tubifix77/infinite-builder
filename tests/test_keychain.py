@@ -7,9 +7,12 @@ def test_available_providers_returns_list():
     result = kc.available_providers()
     assert isinstance(result, list)
 
-def test_ollama_always_present():
-    # Ollama requires no key file — always in the list
+def test_ollama_not_in_providers_by_default():
     kc = Keychain()
+    assert "ollama" not in kc.available_providers()
+
+def test_ollama_present_when_opted_in():
+    kc = Keychain(use_ollama=True)
     assert "ollama" in kc.available_providers()
 
 def test_reset_if_new_day_clears_exhausted():
@@ -25,6 +28,16 @@ def test_reset_if_new_day_clears_exhausted():
 @pytest.mark.asyncio
 async def test_complete_raises_when_all_exhausted():
     kc = Keychain()
+    for name in ["gemini", "groq", "cerebras"]:
+        kc._state["providers"][name] = {
+            "available": False, "requests_today": 9999, "last_reset_date": "2020-01-01"
+        }
+    with pytest.raises(RuntimeError, match="exhausted"):
+        await kc.complete("hello")
+
+@pytest.mark.asyncio
+async def test_complete_raises_when_exhausted_including_ollama():
+    kc = Keychain(use_ollama=True)
     for name in ["gemini", "groq", "cerebras", "ollama"]:
         kc._state["providers"][name] = {
             "available": False, "requests_today": 9999, "last_reset_date": "2020-01-01"

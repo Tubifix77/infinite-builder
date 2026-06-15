@@ -48,8 +48,9 @@ class _QuotaError(Exception):
 
 
 class Keychain:
-    def __init__(self, state_file: str = _STATE_FILE):
+    def __init__(self, state_file: str = _STATE_FILE, use_ollama: bool = False):
         self._state_file = state_file
+        self._use_ollama = use_ollama
         self._keys: dict[str, str] = {}
         for p in PROVIDERS:
             if p["key_file"] is not None:
@@ -88,7 +89,8 @@ class Keychain:
         result = []
         for p in PROVIDERS:
             if p["key_file"] is None:
-                result.append(p["name"])
+                if self._use_ollama:
+                    result.append(p["name"])
             elif p["name"] in self._keys:
                 result.append(p["name"])
         return result
@@ -108,7 +110,7 @@ class Keychain:
         candidates = [
             p for p in PROVIDERS
             if self._state["providers"].get(p["name"], {}).get("available", True)
-            and (p["key_file"] is None or p["name"] in self._keys)
+            and (p["key_file"] is None and self._use_ollama or p["name"] in self._keys)
         ]
         if not candidates:
             raise RuntimeError("all providers exhausted")
