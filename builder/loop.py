@@ -25,6 +25,7 @@ async def run(goal: str, output_dir: str = r"D:\Projects", max_iterations: int =
     journal.append("start", goal, {"goal": goal, "output_dir": output_dir})
 
     current_code = None
+    build_plan = None
     iteration = 0
     start_time = time.time()
 
@@ -36,7 +37,7 @@ async def run(goal: str, output_dir: str = r"D:\Projects", max_iterations: int =
 
             if iteration == 1:
                 print(f"[v{iteration}] planning...")
-                build_plan = await plan(kc, goal)
+                build_plan = await plan(kc, goal)  # stored at outer scope for improve fallback
                 journal.append("plan", str(build_plan))
 
                 print(f"[v{iteration}] building MVP...")
@@ -69,7 +70,7 @@ async def run(goal: str, output_dir: str = r"D:\Projects", max_iterations: int =
                 code = None
                 for attempt in range(3):
                     try:
-                        code = await improve(kc, current_code, inspiration, iteration)
+                        code = await improve(kc, current_code, inspiration, iteration, plan=build_plan)
                         ok, reason = validate(code)
                         if ok:
                             break
