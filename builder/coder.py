@@ -14,6 +14,17 @@ _SNIPPET_SYSTEM = (
     "No markdown fences. No explanation. No <!DOCTYPE html>. Just the raw HTML/JS/CSS snippet."
 )
 
+_SELFCHECK_SYSTEM = (
+    "You are a strict HTML/JS code reviewer. Examine the page and check for these issues:\n"
+    "1. JavaScript code that appears outside <script> tags (raw JS text in the body)\n"
+    "2. document.getElementById() or querySelector() calls referencing IDs/classes not in the HTML\n"
+    "3. Functions that only call console.log() with no real DOM manipulation or state change\n"
+    "4. Duplicate or conflicting event listeners on the same elements\n\n"
+    "Reply with exactly 'OK' if none of these issues are present.\n"
+    "Reply with 'FAIL: <one-line reason>' if any issue is found.\n"
+    "Be brief. Do not explain unless something is wrong."
+)
+
 _MAX_RETRIES = 3
 INJECT_MARKER = "<!-- IB_INJECT -->"
 
@@ -97,6 +108,19 @@ def _integration_hint(imap: dict) -> str:
     return "\n".join(parts)
 
 
+async def _self_check(keychain, code: str) -> tuple[bool, str]:
+    """Ask the LLM to review its own output. Returns (ok, reason). Fails open on error."""
+    prompt = f"Review this HTML page for structural issues:\n\n{code}"
+    try:
+        response = await keychain.complete(prompt, system=_SELFCHECK_SYSTEM)
+        response = response.strip()
+        if "FAIL:" in response:
+            return False, response
+        return True, "ok"
+    except Exception as exc:
+        return True, f"self-check skipped ({exc})"
+
+
 async def build_mvp(keychain, plan: dict) -> str:
     prompt = (
         f"Build a complete single-file HTML app for: {plan.get('title', 'App')}\n"
@@ -109,7 +133,10 @@ async def build_mvp(keychain, plan: dict) -> str:
         code = _strip_fences(await keychain.complete(prompt, system=_BUILD_SYSTEM))
         ok, _ = validate(code)
         if ok:
-            return _ensure_marker(code)
+            sc_ok, sc_reason = await _self_check(keychain, code)
+            if sc_ok:
+                return _ensure_marker(code)
+            print(f"[self-check] rejected MVP: {sc_reason}")
     return _ensure_marker(code)
 
 
@@ -133,5 +160,9 @@ async def improve(keychain, current_code: str, inspiration: list[str], iteration
     for _ in range(_MAX_RETRIES):
         snippet = _strip_fences(await keychain.complete(prompt, system=_SNIPPET_SYSTEM))
         if snippet:
-            return _inject(snippet, current_code)
+            combined = _inject(snippet, current_code)
+            sc_ok, sc_reason = await _self_check(keychain, combined)
+            if sc_ok:
+                return combined
+            print(f"[self-check] rejected snippet (iter {iteration}): {sc_reason}")
     return current_code

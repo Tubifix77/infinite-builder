@@ -14,7 +14,7 @@ def ollama_available():
 @pytest.mark.asyncio
 async def test_full_mvp_build(tmp_path):
     from builder.loop import run
-    await run(goal="a simple counter app", output_dir=str(tmp_path), max_iterations=1)
+    await run(goal="a simple counter app", output_dir=str(tmp_path), max_iterations=1, use_ollama=True)
     slug_dirs = [d for d in os.listdir(tmp_path) if os.path.isdir(os.path.join(tmp_path, d))]
     assert len(slug_dirs) == 1
     v1 = os.path.join(tmp_path, slug_dirs[0], "v1")

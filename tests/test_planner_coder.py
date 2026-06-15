@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 from builder.coder import (
     _strip_fences, _inject, _ensure_marker, _extract_integration_map,
-    _integration_hint, INJECT_MARKER,
+    _integration_hint, _self_check, INJECT_MARKER,
 )
 
 # ---------------------------------------------------------------------------
@@ -160,7 +160,8 @@ async def test_coder_retries_on_invalid_html():
     fake_kc = AsyncMock()
     fake_kc.complete = fake_complete
     result = await build_mvp(fake_kc, {"title":"T","core_features":["x"],"visual_direction":"y"})
-    assert call_count == 2
+    # call 1: invalid html (retried), call 2: valid html, call 3: self-check of valid html
+    assert call_count == 3
     assert "html" in result.lower()
 
 # ---------------------------------------------------------------------------
@@ -222,3 +223,57 @@ async def test_improve_fallback_to_build_mvp_when_no_current_code():
     result = await improve(fake_kc, None, ["clean UI"], 2, plan={"title":"T","core_features":["f"],"visual_direction":"v"})
     assert isinstance(result, str)
     assert "html" in result.lower()
+
+# ---------------------------------------------------------------------------
+# _self_check
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_self_check_passes_on_ok():
+    fake_kc = AsyncMock()
+    fake_kc.complete = AsyncMock(return_value="OK")
+    ok, reason = await _self_check(fake_kc, "<html><body><script>1</script></body></html>")
+    assert ok is True
+
+@pytest.mark.asyncio
+async def test_self_check_passes_on_verbose_ok():
+    fake_kc = AsyncMock()
+    fake_kc.complete = AsyncMock(return_value="The page looks good. All JS is inside script tags.")
+    ok, _ = await _self_check(fake_kc, "<html><body><script>1</script></body></html>")
+    assert ok is True
+
+@pytest.mark.asyncio
+async def test_self_check_fails_on_fail_response():
+    fake_kc = AsyncMock()
+    fake_kc.complete = AsyncMock(return_value="FAIL: JavaScript is outside script tags on line 42")
+    ok, reason = await _self_check(fake_kc, "<html><body>bad js here</body></html>")
+    assert ok is False
+    assert "FAIL:" in reason
+
+@pytest.mark.asyncio
+async def test_self_check_fails_open_on_exception():
+    fake_kc = AsyncMock()
+    fake_kc.complete = AsyncMock(side_effect=RuntimeError("provider down"))
+    ok, _ = await _self_check(fake_kc, "<html><body></body></html>")
+    assert ok is True  # fail open so a provider outage never blocks a save
+
+@pytest.mark.asyncio
+async def test_improve_retries_on_failed_self_check():
+    from builder.coder import improve
+    calls = []
+    async def fake_complete(prompt, system=""):
+        calls.append(system)
+        # alternate: snippet → self-check FAIL → snippet → self-check OK
+        if len(calls) == 1:
+            return "<script>console.log('stub')</script>"
+        if len(calls) == 2:
+            return "FAIL: function is a stub that only console.logs"
+        if len(calls) == 3:
+            return "<button id='btn' onclick='alert(1)'>Click</button>"
+        return "OK"
+    fake_kc = AsyncMock()
+    fake_kc.complete = fake_complete
+    base = f"<!DOCTYPE html><html><body><p>hi</p>\n{INJECT_MARKER}\n</body></html>"
+    result = await improve(fake_kc, base, ["add interaction"], 2)
+    assert len(calls) == 4  # snippet, self-check(fail), snippet retry, self-check(ok)
+    assert "<button" in result
