@@ -1,0 +1,13 @@
+# Runtime state
+quota_state.json
+*.pyc
+__pycache__/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.env
+venv/
+.venv/
+
+# Outputs (the built apps live in D:\Projects\<goal-slug>, not here)
