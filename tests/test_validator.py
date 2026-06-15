@@ -30,3 +30,13 @@ def test_refusal_detected():
 def test_empty_fails():
     ok, reason = validate("")
     assert not ok
+
+def test_js_operators_dont_fail():
+    # => >= <= comparisons and template literals contain < > but are valid
+    html = """<!DOCTYPE html><html><head></head><body>
+<script>
+const fn = (x) => x >= 10 ? 'big' : 'small';
+const items = [1,2,3].filter(n => n > 1).map(n => `<li>${n}</li>`);
+</script></body></html>"""
+    ok, reason = validate(html)
+    assert ok, reason

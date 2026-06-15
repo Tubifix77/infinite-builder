@@ -11,8 +11,4 @@ def validate(code: str) -> tuple[bool, str]:
     for marker in ("i cannot", "i'm sorry", "as an ai"):
         if marker in first200:
             return False, f"LLM refusal detected: '{marker}'"
-    opens = code.count("<")
-    closes = code.count(">")
-    if opens == 0 or abs(opens - closes) / opens > 0.05:
-        return False, f"unbalanced tags: {opens} '<' vs {closes} '>'"
     return True, "ok"

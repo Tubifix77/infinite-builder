@@ -48,6 +48,7 @@ async def run(goal: str, output_dir: str = r"D:\Projects", max_iterations: int =
                         ok, reason = validate(code)
                         if ok:
                             break
+                        print(f"[v{iteration}] attempt {attempt+1} invalid: {reason}")
                         journal.append("error", f"invalid HTML attempt {attempt+1}: {reason}")
                     except RuntimeError as e:
                         if "exhausted" in str(e):
@@ -59,6 +60,7 @@ async def run(goal: str, output_dir: str = r"D:\Projects", max_iterations: int =
                             raise
                 if code is None or not validate(code)[0]:
                     journal.append("error", "failed to build MVP after 3 attempts, skipping")
+                    print(f"[v{iteration}] skipping — could not build valid MVP")
                     continue
             else:
                 query = inspiration_query(goal, iteration)
@@ -86,6 +88,10 @@ async def run(goal: str, output_dir: str = r"D:\Projects", max_iterations: int =
                 if code is None or not validate(code)[0]:
                     journal.append("error", "failed to improve after 3 attempts, keeping previous")
                     code = current_code
+                if code is None:
+                    journal.append("error", "no valid code available, skipping iteration")
+                    print(f"[v{iteration}] skipping — no valid code to save")
+                    continue
 
             iter_time = time.time() - iter_start
             provider = "unknown"
