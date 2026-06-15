@@ -1,6 +1,9 @@
 import pytest
 from unittest.mock import AsyncMock
-from builder.coder import _strip_fences, _inject, _ensure_marker, INJECT_MARKER
+from builder.coder import (
+    _strip_fences, _inject, _ensure_marker, _extract_integration_map,
+    _integration_hint, INJECT_MARKER,
+)
 
 # ---------------------------------------------------------------------------
 # planner
@@ -68,6 +71,50 @@ def test_inject_fallback_before_body():
     result = _inject("<span>x</span>", html)
     assert "<span>x</span>" in result
     assert result.index("<span>x</span>") < result.index("</body>")
+
+# ---------------------------------------------------------------------------
+# integration map extraction
+# ---------------------------------------------------------------------------
+
+_SAMPLE_APP = """<!DOCTYPE html><html><body>
+<script>
+let tasks = [];
+function renderTasks() { document.getElementById('list').innerHTML = tasks.map(t => t.text).join(''); }
+function addTask(text) { tasks.push({text}); renderTasks(); }
+function deleteTask(i) { tasks.splice(i,1); renderTasks(); }
+</script>
+</body></html>"""
+
+def test_extract_integration_map_finds_array():
+    imap = _extract_integration_map(_SAMPLE_APP)
+    assert imap["array"] == "tasks"
+
+def test_extract_integration_map_finds_render():
+    imap = _extract_integration_map(_SAMPLE_APP)
+    assert imap["render"] == "renderTasks"
+
+def test_extract_integration_map_finds_add_delete():
+    imap = _extract_integration_map(_SAMPLE_APP)
+    assert "addTask" in imap["add_fns"]
+    assert "deleteTask" in imap["delete_fns"]
+
+def test_extract_integration_map_empty_on_unknown_code():
+    imap = _extract_integration_map("<html><body><script>console.log(1)</script></body></html>")
+    assert imap["array"] is None
+    assert imap["render"] is None
+    assert imap["add_fns"] == []
+    assert imap["delete_fns"] == []
+
+def test_integration_hint_includes_array_and_render():
+    imap = {"array": "tasks", "render": "renderTasks", "add_fns": ["addTask"], "delete_fns": []}
+    hint = _integration_hint(imap)
+    assert "tasks" in hint
+    assert "renderTasks" in hint
+    assert "do not create new parallel state" in hint
+
+def test_integration_hint_empty_when_nothing_found():
+    imap = {"array": None, "render": None, "add_fns": [], "delete_fns": []}
+    assert _integration_hint(imap) == ""
 
 # ---------------------------------------------------------------------------
 # build_mvp
@@ -138,6 +185,34 @@ async def test_improve_returns_string():
     fake_kc.complete = AsyncMock(return_value="<div>new feature</div>")
     result = await improve(fake_kc, f"<html><body>{INJECT_MARKER}</body></html>", ["clean UI", "dark mode"], 2)
     assert isinstance(result, str)
+
+@pytest.mark.asyncio
+async def test_improve_includes_integration_map_in_prompt():
+    from builder.coder import improve
+    prompts = []
+    async def capture(prompt, system=""):
+        prompts.append(prompt)
+        return "<button>x</button>"
+    fake_kc = AsyncMock()
+    fake_kc.complete = capture
+    await improve(fake_kc, _SAMPLE_APP + f"\n{INJECT_MARKER}", ["add dark mode"], 2)
+    assert prompts, "complete was never called"
+    assert "tasks" in prompts[0]
+    assert "renderTasks" in prompts[0]
+    assert "do not create new parallel state" in prompts[0]
+
+@pytest.mark.asyncio
+async def test_improve_no_hint_when_map_empty():
+    from builder.coder import improve
+    prompts = []
+    async def capture(prompt, system=""):
+        prompts.append(prompt)
+        return "<span>x</span>"
+    fake_kc = AsyncMock()
+    fake_kc.complete = capture
+    plain = f"<html><body><script>console.log(1)</script>{INJECT_MARKER}</body></html>"
+    await improve(fake_kc, plain, ["add dark mode"], 2)
+    assert "Integration context" not in prompts[0]
 
 @pytest.mark.asyncio
 async def test_improve_fallback_to_build_mvp_when_no_current_code():

@@ -37,6 +37,66 @@ def _inject(snippet: str, current_code: str) -> str:
     return re.sub(r"(</body>)", snippet + "\n" + r"\1", current_code, flags=re.IGNORECASE)
 
 
+def _extract_integration_map(code: str) -> dict:
+    """Find the key JS identifiers in the existing app so snippets can hook in."""
+    # Main state array: let/const/var name = []
+    array_match = re.search(r"(?:let|const|var)\s+(\w+)\s*=\s*\[\]", code)
+    array_name = array_match.group(1) if array_match else None
+
+    # Render function: function renderXxx() or const renderXxx = (function|arrow)
+    render_match = re.search(
+        r"function\s+((?:render|display|show|update)\w*)\s*\(", code, re.IGNORECASE
+    )
+    if not render_match:
+        render_match = re.search(
+            r"(?:const|let|var)\s+((?:render|display|show|update)\w*)\s*=\s*(?:function|\()",
+            code, re.IGNORECASE,
+        )
+    render_name = render_match.group(1) if render_match else None
+
+    # Add / delete function names
+    add_fns = re.findall(
+        r"function\s+((?:add|create|new)\w*)\s*\(", code, re.IGNORECASE
+    )
+    delete_fns = re.findall(
+        r"function\s+((?:delete|remove|destroy)\w*)\s*\(", code, re.IGNORECASE
+    )
+
+    return {
+        "array": array_name,
+        "render": render_name,
+        "add_fns": add_fns,
+        "delete_fns": delete_fns,
+    }
+
+
+def _integration_hint(imap: dict) -> str:
+    if not imap["array"] and not imap["render"]:
+        return ""
+    parts = []
+    if imap["array"] and imap["render"]:
+        parts.append(
+            f"The existing app stores todos in {imap['array']}[] and renders with "
+            f"{imap['render']}(). Your snippet MUST use these — do not create new "
+            f"parallel state or a separate array."
+        )
+    elif imap["array"]:
+        parts.append(
+            f"The existing app stores todos in {imap['array']}[]. "
+            f"Your snippet MUST use this — do not create a separate array."
+        )
+    elif imap["render"]:
+        parts.append(
+            f"The existing app renders with {imap['render']}(). "
+            f"Call it after any state change."
+        )
+    if imap["add_fns"]:
+        parts.append(f"Existing add function(s): {', '.join(imap['add_fns'])}().")
+    if imap["delete_fns"]:
+        parts.append(f"Existing delete function(s): {', '.join(imap['delete_fns'])}().")
+    return "\n".join(parts)
+
+
 async def build_mvp(keychain, plan: dict) -> str:
     prompt = (
         f"Build a complete single-file HTML app for: {plan.get('title', 'App')}\n"
@@ -60,11 +120,15 @@ async def improve(keychain, current_code: str, inspiration: list[str], iteration
         raise ValueError("current_code is None and no plan provided for fallback")
 
     top = inspiration[0] if inspiration else "add a useful interactive feature"
+    imap = _extract_integration_map(current_code)
+    hint = _integration_hint(imap)
+
     prompt = (
         f"Add one new feature to this app inspired by:\n"
         f"  {top}\n\n"
-        f"Write ONLY the new code snippet, not the whole app. "
-        f"It will be injected into an existing HTML page."
+        + (f"Integration context:\n{hint}\n\n" if hint else "")
+        + "Write ONLY the new code snippet, not the whole app. "
+        "It will be injected into an existing HTML page."
     )
     for _ in range(_MAX_RETRIES):
         snippet = _strip_fences(await keychain.complete(prompt, system=_SNIPPET_SYSTEM))
