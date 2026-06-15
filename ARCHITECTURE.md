@@ -2,7 +2,7 @@
 
 **Purpose:** A forever-running daemon that takes a user goal, builds an MVP using free-tier LLMs, then autonomously searches the web for inspiration and goldplates a new version each iteration — saving every version to disk — until manually stopped.
 
-**Runs entirely free.** No paid API tokens. Uses the same flat-file key pattern as your other projects (`D:\AI\<service>`).
+**Runs entirely free.** No paid API tokens. Uses the same flat-file key pattern as your other projects (`D:\AI\<service>.key`).
 
 **Build target:** Python 3.x, Windows 11. Intended to be built with Claude Code using TDD — each step has a concrete passing test before the next step begins.
 
@@ -12,7 +12,7 @@
 
 1. **Build the room, not the worker.** The executive controls timing, saving, searching, and prompting. The LLM only generates code/ideas.
 2. **Every iteration is atomic.** Generate → validate → save → log. A failed iteration is logged and skipped, never corrupts state.
-3. **Flat keychain.** API keys live in `D:\AI\<service>` (e.g. `D:\AI\gemini`, `D:\AI\groq`). Read at startup, never hardcoded.
+3. **Flat keychain.** API keys live in `D:\AI\<service>.key` (e.g. `D:\AI\gemini.key`, `D:\AI\groq.key`). Read at startup, never hardcoded.
 4. **Free tier aware.** On 429 or quota exhaustion, rotate to the next available provider. Sleep and retry when all exhausted.
 5. **One goal = one folder.** Each run creates `D:\Projects\<goal-slug>\` containing every version as a numbered subfolder.
 
@@ -25,7 +25,7 @@ main.py  (CLI entry: python main.py "your goal here")
    │
    ▼
 builder/
-   ├── keychain.py      — load keys from D:\AI\, provider rotation, quota tracking
+   ├── keychain.py      — load keys from D:\AI\*.key, provider rotation, quota tracking
    ├── planner.py       — LLM call: decompose goal → build plan
    ├── coder.py         — LLM call: generate / improve HTML artifact
    ├── searcher.py      — web search for inspiration (DuckDuckGo scrape, no key needed)
@@ -54,12 +54,54 @@ D:\Projects\todo-app\
 
 | Provider | Key file | Model | Notes |
 |---|---|---|---|
-| Google Gemini | `D:\AI\gemini` | `gemini-2.0-flash` | Floor. 1500 RPD, 15 RPM |
-| Groq | `D:\AI\groq` | `llama-3.3-70b-versatile` | ~1000 RPD, TPM-capped |
-| Cerebras | `D:\AI\cerebras` | `llama-3.3-70b` | ~1700 RPD, 60K TPM |
-| Ollama (local) | none | configurable | Fallback, no rate limit |
+| Google Gemini | `D:\AI\gemini.key` | `gemini-2.5-flash` | Floor. 250 RPD (daily_calls), resets 00:00 LA time |
+| Groq | `D:\AI\groq.key` | `llama-3.3-70b-versatile` | ~1000 RPD, TPM-capped |
+| Cerebras | `D:\AI\cerebras.key` | `gpt-oss-120b` | ~1700 RPD, 60K TPM |
+| Ollama (local) | none needed | `gemma3:12b` | Fallback, no rate limit |
 
-The keychain tries providers in capability order (Gemini → Groq → Cerebras → Ollama). On 429 or daily exhaustion it marks that provider unavailable and tries the next. When all are exhausted it sleeps 2 minutes and retries. This is lifted directly from APEX's `quota_state.py` logic.
+The keychain tries providers in capability order (Gemini → Groq → Cerebras → Ollama). On 429 or daily exhaustion it marks that provider unavailable and tries the next. When all are exhausted it sleeps 2 minutes and retries.
+
+**Key file format:** plain text, one line, just the raw key — no quotes, no label. Same as `groq.key` and `cerebras.key` already in `D:\AI\`. Create `gemini.key` the same way.
+
+Provider configs (hardcoded, keys injected at runtime):
+```python
+PROVIDERS = [
+    {
+        "name": "gemini",
+        "key_file": r"D:\AI\gemini.key",
+        "model": "gemini-2.5-flash",
+        "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "rpd_limit": 250,
+        "capability": 8,
+    },
+    {
+        "name": "groq",
+        "key_file": r"D:\AI\groq.key",
+        "model": "llama-3.3-70b-versatile",
+        "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+        "rpd_limit": 1000,
+        "capability": 7,
+    },
+    {
+        "name": "cerebras",
+        "key_file": r"D:\AI\cerebras.key",
+        "model": "gpt-oss-120b",
+        "endpoint": "https://api.cerebras.ai/v1/chat/completions",
+        "rpd_limit": 1700,
+        "capability": 7,
+    },
+    {
+        "name": "ollama",
+        "key_file": None,
+        "model": "gemma3:12b",
+        "endpoint": "http://localhost:11434/v1/chat/completions",
+        "rpd_limit": None,       # unlimited
+        "capability": 5,
+    },
+]
+```
+
+All four use the OpenAI-compatible `/chat/completions` endpoint — same as Growing Spine's `provider.py`.
 
 ---
 
@@ -80,8 +122,7 @@ infinite-builder/
 ├── builder/__init__.py
 ├── builder/keychain.py     (stub: just reads key files, prints what it found)
 ├── builder/journal.py      (stub: just appends to JSONL)
-├── requirements.txt        (aiohttp, requests, pytest)
-├── README.md
+├── requirements.txt
 └── tests/
     └── test_smoke.py
 ```
@@ -120,7 +161,6 @@ def test_import():
 def test_keychain_init():
     from builder.keychain import Keychain
     kc = Keychain()
-    # Should not raise even if no keys present
     providers = kc.available_providers()
     assert isinstance(providers, list)
 ```
@@ -131,54 +171,18 @@ def test_keychain_init():
 
 ### Phase 1 — Keychain
 
-**Goal:** Read API keys from `D:\AI\<service>`, track quota, rotate providers on exhaustion.
+**Goal:** Read API keys from `D:\AI\*.key`, track quota, rotate providers on exhaustion.
 
 **`builder/keychain.py` — full implementation:**
 
 Key behaviours:
-- `__init__`: scans `D:\AI\` for known key files (`gemini`, `groq`, `cerebras`). Reads content, strips whitespace. Marks Ollama as always-available with no key.
-- `available_providers() -> list[str]`: returns provider names with a key present (or Ollama).
-- `async complete(prompt, system="") -> str`: tries providers in order. On success returns text. On 429/quota raises are caught, that provider marked exhausted, next tried. Raises `RuntimeError("all exhausted")` when none left.
+- `__init__`: for each provider in `PROVIDERS`, read `key_file` if set (strip whitespace). Ollama has `key_file=None` — always available, no key needed.
+- `available_providers() -> list[str]`: returns names of providers whose key file exists and is non-empty, plus always Ollama.
+- `async complete(prompt, system="") -> str`: tries providers in capability order. On success returns text. On 429/quota exhaustion: mark that provider exhausted, try next. Raises `RuntimeError("all providers exhausted")` when none left.
 - `reset_if_new_day()`: checks if UTC date changed since last reset, clears exhausted flags.
-- Quota state persisted to `quota_state.json` in the run directory (same schema as APEX: `{providers: {name: {available, requests_today, last_reset_date}}}`).
+- Quota state persisted to `quota_state.json` next to `main.py`.
 
-Provider configs (hardcoded, keys injected at runtime):
-```python
-PROVIDERS = [
-    {
-        "name": "gemini",
-        "model": "gemini-2.0-flash",
-        "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "rpd_limit": 1500,
-        "capability": 8,
-    },
-    {
-        "name": "groq",
-        "model": "llama-3.3-70b-versatile",
-        "endpoint": "https://api.groq.com/openai/v1",
-        "rpd_limit": 1000,
-        "capability": 7,
-    },
-    {
-        "name": "cerebras",
-        "model": "llama-3.3-70b",
-        "endpoint": "https://api.cerebras.ai/v1",
-        "rpd_limit": 1700,
-        "capability": 7,
-    },
-    {
-        "name": "ollama",
-        "model": "gemma3:12b",
-        "endpoint": "http://localhost:11434/v1",
-        "rpd_limit": None,       # unlimited
-        "capability": 5,
-    },
-]
-```
-
-All four use the OpenAI-compatible `/chat/completions` endpoint. Gemini uses the `/v1beta/openai` path that Google exposes.
-
-**Reference implementation:** `D:\Projects\apex\adapters\gemini_flash.py` — proven in production, handles 429, timeouts, and Ollama warm-up. Use it as the model for `_call_provider`.
+**Reference implementation:** `D:\Projects\apex\adapters\gemini_flash.py` and `D:\Projects\growing-spine\keychain\provider.py` — both proven in production. The actual HTTP call is a standard OpenAI-compatible POST; use `urllib.request` (no extra deps) exactly as Growing Spine does, or `aiohttp` as APEX does.
 
 **Test `tests/test_keychain.py`:**
 ```python
@@ -191,16 +195,16 @@ def test_available_providers_returns_list():
     result = kc.available_providers()
     assert isinstance(result, list)
 
-def test_no_keys_still_has_ollama():
+def test_ollama_always_present():
+    # Ollama requires no key file — always in the list
     kc = Keychain()
-    providers = kc.available_providers()
-    assert "ollama" in providers
+    assert "ollama" in kc.available_providers()
 
 def test_reset_if_new_day_clears_exhausted():
     kc = Keychain()
     kc._state["providers"]["gemini"] = {
         "available": False,
-        "requests_today": 1500,
+        "requests_today": 250,
         "last_reset_date": "2020-01-01",
     }
     kc.reset_if_new_day()
@@ -210,14 +214,16 @@ def test_reset_if_new_day_clears_exhausted():
 async def test_complete_raises_when_all_exhausted():
     kc = Keychain()
     for name in ["gemini", "groq", "cerebras", "ollama"]:
-        kc._state["providers"][name] = {"available": False, "requests_today": 9999, "last_reset_date": "2020-01-01"}
+        kc._state["providers"][name] = {
+            "available": False, "requests_today": 9999, "last_reset_date": "2020-01-01"
+        }
     with pytest.raises(RuntimeError, match="exhausted"):
         await kc.complete("hello")
 
 @pytest.mark.asyncio
 async def test_complete_returns_string_on_success(monkeypatch):
     kc = Keychain()
-    async def fake_call(provider_name, prompt, system):
+    async def fake_call(provider_cfg, prompt, system):
         return "hello world"
     monkeypatch.setattr(kc, "_call_provider", fake_call)
     result = await kc.complete("say hi")
@@ -355,8 +361,6 @@ def test_meta_json_contents():
 
 **Goal:** Sanity-check generated HTML without any LLM call.
 
-**`builder/validator.py` — full implementation:**
-
 Pure Python checks. Returns `(ok: bool, reason: str)`.
 
 Checks (in order, fail fast):
@@ -411,14 +415,12 @@ def test_empty_fails():
 
 **Goal:** DuckDuckGo web search returning inspiration strings. No API key required.
 
-**`builder/searcher.py` — full implementation:**
-
 Uses `requests` to hit `https://html.duckduckgo.com/html/?q=<query>` and extracts result titles + snippets with regex. Returns `list[str]` of up to 5 inspiration strings.
 
 Key behaviours:
-- `search(query: str, n=5) -> list[str]`: scrape DDG HTML, return title+snippet pairs as strings. On any network error, return `[]` (never raises).
-- `inspiration_query(goal: str, iteration: int) -> str`: generates a focused query rotating through angles — UX patterns (iter 1), visual design (2), features (3), accessibility (4), animation (5), back to UX (6+).
-- 2-second timeout. If DDG returns nothing useful, return empty list silently.
+- `search(query: str, n=5) -> list[str]`: never raises — returns `[]` on any network error.
+- `inspiration_query(goal: str, iteration: int) -> str`: rotates through angles — UX patterns (iter 1), visual design (2), features (3), accessibility (4), animation (5), back to UX (6+).
+- 2-second timeout.
 
 **Test `tests/test_searcher.py`:**
 ```python
@@ -479,7 +481,7 @@ Both use `keychain.complete()` and parse responses defensively — if JSON parsi
 
 #### `builder/planner.py`
 
-- `async plan(keychain, goal) -> dict`: one LLM call. Returns:
+- `async plan(keychain, goal) -> dict`: one LLM call. System prompt instructs model to respond with ONLY valid JSON, no markdown fences. Returns:
 ```json
 {
   "title": "short title",
@@ -488,11 +490,10 @@ Both use `keychain.complete()` and parse responses defensively — if JSON parsi
   "visual_direction": "clean, dark, minimalist"
 }
 ```
-System prompt instructs the model to respond with ONLY valid JSON, no markdown fences.
 
 #### `builder/coder.py`
 
-- `async build_mvp(keychain, plan: dict) -> str`: one LLM call. Returns complete single-file HTML. System prompt: "Respond ONLY with the complete HTML code, nothing else. No markdown. No explanation. Start with <!DOCTYPE html>."
+- `async build_mvp(keychain, plan: dict) -> str`: one LLM call. System prompt: "Respond ONLY with the complete HTML code, nothing else. No markdown. No explanation. Start with <!DOCTYPE html>."
 - `async improve(keychain, current_code: str, inspiration: list[str], iteration: int) -> str`: passes current code + inspiration snippets, returns improved HTML.
 - Both retry up to 3 times if `validate()` rejects the output.
 
@@ -505,7 +506,7 @@ from unittest.mock import AsyncMock
 async def test_plan_returns_dict_on_valid_json():
     from builder.planner import plan
     fake_kc = AsyncMock()
-    fake_kc.complete = AsyncMock(return_value='{"title":"Test","description":"A test app","core_features":["feature 1"],"visual_direction":"clean"}')
+    fake_kc.complete = AsyncMock(return_value='{"title":"Test","description":"A test app","core_features":["f1"],"visual_direction":"clean"}')
     result = await plan(fake_kc, "a test app")
     assert isinstance(result, dict)
     assert "core_features" in result
@@ -526,8 +527,7 @@ async def test_build_mvp_returns_string():
     from builder.coder import build_mvp
     fake_kc = AsyncMock()
     fake_kc.complete = AsyncMock(return_value="<!DOCTYPE html><html><head></head><body><script>1</script></body></html>")
-    plan_dict = {"title": "Todo", "core_features": ["add items"], "visual_direction": "clean"}
-    result = await build_mvp(fake_kc, plan_dict)
+    result = await build_mvp(fake_kc, {"title":"T","core_features":["f"],"visual_direction":"v"})
     assert isinstance(result, str)
     assert "html" in result.lower()
 
@@ -551,8 +551,7 @@ async def test_coder_retries_on_invalid_html():
         return "<!DOCTYPE html><html><head></head><body><script>ok</script></body></html>"
     fake_kc = AsyncMock()
     fake_kc.complete = fake_complete
-    plan_dict = {"title": "Test", "core_features": ["x"], "visual_direction": "y"}
-    result = await build_mvp(fake_kc, plan_dict)
+    result = await build_mvp(fake_kc, {"title":"T","core_features":["x"],"visual_direction":"y"})
     assert call_count == 2
     assert "html" in result.lower()
 ```
@@ -595,28 +594,31 @@ On KeyboardInterrupt: log "stopped by user", print summary (N versions saved, el
 **Test `tests/test_loop.py`:**
 ```python
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+from contextlib import contextmanager
+
+@contextmanager
+def patch_makers(loop_mod, fake_kc):
+    with patch.object(loop_mod, "_make_keychain", return_value=fake_kc):
+        yield
 
 @pytest.mark.asyncio
 async def test_loop_runs_one_iteration(tmp_path):
     from builder import loop as loop_mod
     fake_kc = AsyncMock()
-    # First call = planner (returns JSON), subsequent = coder (returns HTML)
     fake_kc.complete = AsyncMock(side_effect=[
         '{"title":"T","description":"d","core_features":["f"],"visual_direction":"v"}',
         "<!DOCTYPE html><html><head></head><body><script>1</script></body></html>",
     ])
     fake_kc.reset_if_new_day = MagicMock()
-
     with patch_makers(loop_mod, fake_kc):
         await loop_mod.run(goal="test app", output_dir=str(tmp_path), max_iterations=1)
-
     v1 = tmp_path / "test-app" / "v1"
     assert v1.exists()
     assert (v1 / "index.html").exists()
 
 @pytest.mark.asyncio
-async def test_loop_skips_invalid_and_continues(tmp_path):
+async def test_loop_retries_on_invalid_html(tmp_path):
     from builder import loop as loop_mod
     call_count = 0
     async def fake_complete(prompt, system=""):
@@ -625,23 +627,14 @@ async def test_loop_skips_invalid_and_continues(tmp_path):
         if call_count == 1:
             return '{"title":"T","description":"d","core_features":["f"],"visual_direction":"v"}'
         if call_count in (2, 3):
-            return "bad output"  # will fail validate, up to 3 retries
+            return "bad output"
         return "<!DOCTYPE html><html><head></head><body><script>1</script></body></html>"
     fake_kc = AsyncMock()
     fake_kc.complete = fake_complete
     fake_kc.reset_if_new_day = MagicMock()
     with patch_makers(loop_mod, fake_kc):
         await loop_mod.run(goal="test app", output_dir=str(tmp_path), max_iterations=1)
-    # Should still have saved v1 after retrying
     assert (tmp_path / "test-app" / "v1" / "index.html").exists()
-
-# Helper — patch _make_keychain and _make_saver
-from contextlib import contextmanager
-from unittest.mock import patch
-@contextmanager
-def patch_makers(loop_mod, fake_kc):
-    with patch.object(loop_mod, "_make_keychain", return_value=fake_kc):
-        yield
 ```
 
 **Passing condition:** `pytest tests/test_loop.py` — 2 PASSED.
@@ -655,7 +648,7 @@ def patch_makers(loop_mod, fake_kc):
 **Test `tests/test_integration.py`:**
 ```python
 """
-Integration test — requires Ollama running at localhost:11434.
+Integration test — requires Ollama running at localhost:11434 with gemma3:12b.
 Skipped automatically if Ollama is not reachable.
 """
 import pytest, os, requests
@@ -671,18 +664,17 @@ def ollama_available():
 async def test_full_mvp_build(tmp_path):
     from builder.loop import run
     await run(goal="a simple counter app", output_dir=str(tmp_path), max_iterations=1)
-
-    slug_dirs = [d for d in os.listdir(tmp_path) if os.path.isdir(tmp_path / d)]
+    slug_dirs = [d for d in os.listdir(tmp_path) if os.path.isdir(os.path.join(tmp_path, d))]
     assert len(slug_dirs) == 1
-    v1 = tmp_path / slug_dirs[0] / "v1"
-    assert (v1 / "index.html").exists()
-    assert (v1 / "meta.json").exists()
-    html = (v1 / "index.html").read_text()
+    v1 = os.path.join(tmp_path, slug_dirs[0], "v1")
+    assert os.path.exists(os.path.join(v1, "index.html"))
+    assert os.path.exists(os.path.join(v1, "meta.json"))
+    html = open(os.path.join(v1, "index.html")).read()
     assert "<html" in html.lower()
-    assert (tmp_path / slug_dirs[0] / "journal.jsonl").exists()
+    assert os.path.exists(os.path.join(tmp_path, slug_dirs[0], "journal.jsonl"))
 ```
 
-**Passing condition:** `pytest tests/test_integration.py -v` — 1 PASSED (or SKIPPED).
+**Passing condition:** `pytest tests/test_integration.py -v` — 1 PASSED (or SKIPPED if Ollama not running).
 
 ---
 
@@ -696,7 +688,7 @@ Usage: python main.py "your goal here"
        python main.py "your goal here" --dir D:\Projects
        python main.py "your goal here" --max 10
 """
-import sys, argparse, asyncio
+import argparse, asyncio
 from builder.loop import run
 
 def main():
@@ -758,17 +750,17 @@ infinite-builder/
 
 ## Key Design Decisions
 
-**Why single-file HTML?** Opens directly in a browser, no build step, no server. The creature produces a complete runnable artifact every iteration.
+**Why single-file HTML?** Opens directly in a browser, no build step, no server. Every iteration is a complete runnable artifact.
 
-**Why DuckDuckGo with no key?** The webproxy MCP is Claude Desktop only — not available in Claude Code. DDG's HTML endpoint works without auth for lightweight scraping.
+**Why DuckDuckGo with no key?** Claude Code has no webproxy MCP — that's Claude Desktop only. DDG's HTML endpoint works without auth for lightweight scraping.
 
-**Why Gemini Flash as the floor?** Same reason APEX uses it: 1500 RPD, permanently free, 1M context window fits large HTML + the full improvement prompt in one call.
+**Why Gemini 2.5 Flash as floor?** 250 RPD free, permanently, and its 1M context window fits large HTML + the full improvement prompt in one call. The model ID and endpoint are verified against the live Growing Spine config.
 
-**Why validate before saving?** Follows the done-gate principle from Growing Spine: completion must be real, not just asserted. A pure-Python validator catches LLM refusals and truncated code at zero token cost.
+**Why validate before saving?** Follows the done-gate principle from Growing Spine: completion must be real, not just asserted. Pure-Python validator catches LLM refusals and truncated output at zero token cost.
 
-**Why max 3 retries per iteration?** Enough to recover from a single bad generation; not enough to spin. On 3 failures: log, skip, keep the previous `current_code`, move on.
+**Why max 3 retries per iteration?** Enough to recover from a single bad generation; not enough to spin. On 3 failures: log, skip, keep previous `current_code`, continue.
 
-**Why `max_iterations` parameter?** Makes the system testable without running forever. Production: omit or `--max None`. Tests: `--max 1`.
+**Why `max_iterations` parameter?** Makes the system testable without running forever. Production: omit. Tests: `--max 1`.
 
 ---
 
@@ -780,5 +772,5 @@ When picking this up in a new session:
 2. Run `pytest tests/ -v` — the highest passing phase is where you are.
 3. If mid-phase: read the failing test, implement to pass it.
 4. Never skip a phase's test gate.
-5. For LLM API implementation details: `D:\Projects\apex\adapters\gemini_flash.py` is the reference — proven in production, handles 429, timeouts, and Ollama warm-up correctly.
+5. For the HTTP call implementation: `D:\Projects\growing-spine\keychain\provider.py` is the simplest reference (pure stdlib, no aiohttp). `D:\Projects\apex\adapters\gemini_flash.py` is the aiohttp version with fuller error handling. Either approach works — pick one and be consistent.
 
