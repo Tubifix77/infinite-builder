@@ -1,7 +1,7 @@
 """
-Infinite Builder — autonomous LLM goldplating loop.
+Infinite Builder -- autonomous LLM goldplating loop.
 Usage: python main.py "your goal here"
-       python main.py "your goal here" --dir D:\Projects
+       python main.py "your goal here" --dir D:\\Projects
        python main.py "your goal here" --max 10
 """
 import argparse, asyncio
@@ -15,7 +15,7 @@ def main():
     parser.add_argument("--ollama", action="store_true", help="Enable Ollama as a provider (opt-in)")
     args = parser.parse_args()
     goal = " ".join(args.goal)
-    print(f"\n∞  Infinite Builder")
+    print(f"\n[infinite-builder]")
     print(f"   Goal:   {goal}")
     print(f"   Output: {args.dir}")
     print(f"   Ctrl+C to stop\n")

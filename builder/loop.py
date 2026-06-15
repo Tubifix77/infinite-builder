@@ -97,7 +97,7 @@ async def run(goal: str, output_dir: str = r"D:\Projects", max_iterations: int =
             path = saver.save(code, meta)
             current_code = code
             journal.append("save", path, {"version": iteration})
-            print(f"[v{iteration}] ✓ saved to {path}")
+            print(f"[v{iteration}] saved to {path}")
 
     except KeyboardInterrupt:
         elapsed = time.time() - start_time
