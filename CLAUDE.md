@@ -2,13 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project status: greenfield (spec-only)
+## Project status: done
 
-This repo currently contains **only documentation** — no code exists yet (no `main.py`, no
-`builder/`, no `tests/`, no `requirements.txt`). [ARCHITECTURE.md](ARCHITECTURE.md) is the
-authoritative, self-contained build spec: it gives complete implementations or precise
-behavioral specs for every module, plus the full test suite, organized as 10 TDD phases
-(Phase 0 → Phase 9).
+All 10 TDD phases are built: `main.py`, `builder/` (coder, journal, keychain, loop,
+planner, saver, searcher, validator — 8 modules), `tests/` (8 matching test files), and
+`requirements.txt` all exist. `quota_state.json` shows real usage (127 Ollama requests
+logged), so this has been run for real, not just built and shelved.
+[ARCHITECTURE.md](ARCHITECTURE.md) remains the authoritative build spec for reference —
+it gives complete implementations or precise behavioral specs for every module — but the
+build it describes is complete.
 
 **Build discipline (this is the core workflow):**
 - Implement **one phase at a time**, in order. Each phase ends with a named test gate, e.g.
